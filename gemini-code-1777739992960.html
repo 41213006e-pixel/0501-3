@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PICO Health: Random Adventure</title>
+    <style>
+        :root {
+            --pico-bg: #f0f0f0;
+            --pico-dark: #333;
+            --pico-door: #ff7bac;
+        }
+
+        body {
+            font-family: 'Courier New', monospace;
+            background-color: var(--pico-bg);
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        #ui {
+            margin-bottom: 10px;
+            text-align: center;
+            width: 800px;
+        }
+
+        #question-box {
+            background: var(--pico-dark);
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 20px;
+            box-shadow: 0 4px 0px #000;
+        }
+
+        canvas {
+            background-color: white;
+            border: 6px solid var(--pico-dark);
+        }
+    </style>
+</head>
+<body>
+
+<div id="ui">
+    <div id="question-box">點擊畫面開始遊戲</div>
+    <p>控制：← → 移動 ｜ ↑ 跳躍 ｜ 必須全員到達終點</p>
+</div>
+
+<canvas id="game-canvas" width="800" height="550"></canvas>
+
+<script>
+    const canvas = document.getElementById('game-canvas');
+    const ctx = canvas.getContext('2d');
+
+    const levels = [
+        { q: "成人每日建議飲水量是體重(kg)乘以多少？", options: ["10ml", "20ml", "30-35ml", "100ml"], correct: 2 },
+        { q: "下列哪種運動最能增進心肺功能？", options: ["看電視", "慢跑", "睡覺", "下棋"], correct: 1 },
+        { q: "洗手「內外夾弓大立腕」，最後是？", options: ["指縫", "指甲", "手背", "手腕"], correct: 3 },
+        { q: "預防近視，用眼30分鐘應休息多久？", options: ["1分鐘", "10分鐘", "30分鐘", "不必休息"], correct: 1 }
+    ];
+
+    let playerCount = 2;
+    let currentLevel = 0;
+    let doorOpen = false;
+    let players = [];
+    let platforms = [];
+    let doorPos = { x: 0, y: 0 };
+    let gameStarted = false;
+
+    // 隨機生成地形的函數
+    function generateRandomMap() {
+        platforms = [];
+        
+        // 第一層 (出生點)：通常在左上方
+        platforms.push({ x: 0, y: 120, w: 300 + Math.random() * 200, h: 15 });
+        
+        // 第二層 (中轉層)：隨機左右位置
+        const midW = 300 + Math.random() * 300;
+        const midX = Math.random() * (800 - midW);
+        platforms.push({ x: midX, y: 280, w: midW, h: 15 });
+        
+        // 第三層 (答案與終點)：隨機分布
+        const botW = 400 + Math.random() * 200;
+        const botX = Math.random() * (800 - botW);
+        platforms.push({ x: botX, y: 450, w: botW, h: 15 });
+
+        // 隨機決定門的位置 (在第三層的左端或右端)
+        doorPos.y = 450 - 70;
+        doorPos.x = Math.random() > 0.5 ? botX + 10 : botX + botW - 50;
+    }
+
+    function initLevel() {
+        doorOpen = false;
+        generateRandomMap();
+        
+        const colors = ['#4ea5ff', '#ff7bac', '#f1c40f', '#2ecc71'];
+        players = [];
+        for (let i = 0; i < playerCount; i++) {
+            players.push({
+                x: platforms[0].x + 50 - i * 35,
+                y: platforms[0].y - 40,
+                vx: 0,
+                vy: 0,
+                color: colors[i],
+                size: 30,
+                onGround: false
+            });
+        }
+        document.getElementById('question-box').innerText = levels[currentLevel].q;
+    }
+
+    const keys = {};
+    window.addEventListener('keydown', e => {
+        keys[e.code] = true;
+        if (!gameStarted) {
+            gameStarted = true;
+            const num = prompt("輸入玩家人數 (2-4):", "2");
+            playerCount = Math.min(Math.max(parseInt(num) || 2, 2), 4);
+            initLevel();
+            requestAnimationFrame(gameLoop);
+        }
+    });
+    window.addEventListener('keyup', e => keys[e.code] = false);
+
+    function update() {
+        const head = players[0];
+
+        // 排頭控制
+        if (keys['ArrowLeft']) head.vx = -4.5;
+        else if (keys['ArrowRight']) head.vx = 4.5;
+        else head.vx *= 0.8;
+
+        if (keys['ArrowUp'] && head.onGround) {
+            head.vy = -11;
+            head.onGround = false;
+        }
+
+        players.forEach((p, i) => {
+            p.vy += 0.5; // 重力
+            p.x += p.vx;
+            p.y += p.vy;
+            p.onGround = false;
+
+            // 碰撞平台
+            platforms.forEach(plat => {
+                if (p.x + p.size > plat.x && p.x < plat.x + plat.w &&
+                    p.y + p.size > plat.y && p.y + p.size < plat.y + plat.h + 10 && p.vy >= 0) {
+                    p.y = plat.y - p.size;
+                    p.vy = 0;
+                    p.onGround = true;
+                }
+            });
+
+            // 物理連動 (繩索效果)
+            if (i > 0) {
+                const prev = players[i-1];
+                const dx = prev.x - p.x;
+                const dy = prev.y - p.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                const tether = 35; // 連接長度
+
+                if (dist > tether) {
+                    const angle = Math.atan2(dy, dx);
+                    p.x = prev.x - Math.cos(angle) * tether;
+                    p.y = prev.y - Math.sin(angle) * tether;
+                }
+            }
+        });
+
+        // 檢查底層答案 (最後一人去碰)
+        const lastP = players[players.length - 1];
+        const data = levels[currentLevel];
+        data.options.forEach((opt, i) => {
+            const optX = 100 + i * 150;
+            if (Math.abs(lastP.x - optX) < 40 && Math.abs(lastP.y - 480) < 40) {
+                if (i === data.correct && !doorOpen) {
+                    doorOpen = true;
+                    alert("正確答案！門開了！");
+                }
+            }
+        });
+
+        // 失敗檢查
+        if (players.some(p => p.y > 550)) {
+            alert("有人掉下去了！重新挑戰此關");
+            initLevel();
+        }
+
+        // 過關檢查 (必須全員接近門)
+        const distToDoor = Math.abs(head.x - doorPos.x);
+        if (doorOpen && distToDoor < 30 && head.y > 350) {
+            currentLevel++;
+            if (currentLevel < levels.length) initLevel();
+            else {
+                alert("太強了！完成所有隨機關卡！");
+                currentLevel = 0;
+                initLevel();
+            }
+        }
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // 畫平台
+        ctx.fillStyle = "#333";
+        platforms.forEach(p => {
+            ctx.fillRect(p.x, p.y, p.w, p.h);
+            ctx.fillRect(p.x, p.y + p.h, p.w, 4); // 陰影
+        });
+
+        // 畫答案 (底層浮空字)
+        const data = levels[currentLevel];
+        data.options.forEach((opt, i) => {
+            ctx.fillStyle = "#888";
+            ctx.font = "bold 14px Arial";
+            ctx.fillText(opt, 100 + i * 150, 500);
+            ctx.beginPath();
+            ctx.arc(115 + i * 150, 480, 5, 0, Math.PI*2);
+            ctx.fill();
+        });
+
+        // 畫門
+        ctx.fillStyle = doorOpen ? "#ff7bac" : "#ccc";
+        ctx.fillRect(doorPos.x, doorPos.y, 40, 70);
+        ctx.strokeRect(doorPos.x, doorPos.y, 40, 70);
+        ctx.fillStyle = "white";
+        ctx.fillText(doorOpen ? "EXIT" : "LOCKED", doorPos.x + 2, doorPos.y + 35);
+
+        // 畫玩家連線
+        ctx.beginPath();
+        ctx.strokeStyle = "#999";
+        ctx.setLineDash([5, 5]);
+        players.forEach((p, i) => {
+            if (i === 0) ctx.moveTo(p.x + 15, p.y + 15);
+            else ctx.lineTo(p.x + 15, p.y + 15);
+        });
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // 畫玩家
+        players.forEach(p => {
+            ctx.fillStyle = p.color;
+            ctx.fillRect(p.x, p.y, p.size, p.size);
+            ctx.strokeRect(p.x, p.y, p.size, p.size);
+            ctx.fillStyle = "black";
+            ctx.fillRect(p.x + 6, p.y + 8, 4, 4); // 眼睛
+            ctx.fillRect(p.x + 20, p.y + 8, 4, 4);
+        });
+    }
+
+    function gameLoop() {
+        update();
+        draw();
+        requestAnimationFrame(gameLoop);
+    }
+</script>
+
+</body>
+</html>
